@@ -1,0 +1,21 @@
+[Unit]
+Description=DandyDash API
+After=network.target postgresql.service
+
+[Service]
+User=dandydash-app
+Group=dandydash-app
+WorkingDirectory=/opt/dandydash-api
+Environment="PATH=/opt/dandydash-api/venv/bin"
+EnvironmentFile=/opt/dandydash-api/.env
+ExecStart=/opt/dandydash-api/venv/bin/gunicorn \
+    --workers 4 \
+    --bind 127.0.0.1:5000 \
+    --access-logfile /var/log/dandydash/access.log \
+    --error-logfile /var/log/dandydash/error.log \
+    run:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
