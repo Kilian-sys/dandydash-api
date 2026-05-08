@@ -1,0 +1,222 @@
+---
+# ═══════════════════════════════════════════════════════════════
+#  DandyDash — Playbook completo de despliegue
+#  Uso: ansible-playbook -i inventory.ini deploy.yml
+# ═══════════════════════════════════════════════════════════════
+
+- name: Desplegar DandyDash API en dandydash-app
+  hosts: dandydash_app
+  become: yes
+
+  vars:
+    app_dir: /opt/dandydash-api
+    frontend_dir: /opt/dandydash-frontend
+    log_dir: /var/log/dandydash
+    app_user: dandydash-app
+    domain: dandydash.local
+    db_name: dandydashdb
+    db_user: dandydash
+    db_pass: "DBPass_DandyDash2026!"
+    ldap_server: "192.168.30.10"
+    ldap_base: "DC=dandydash,DC=local"
+    ldap_bind_user: "CN=Administrator,CN=Users,DC=dandydash,DC=local"
+    ldap_bind_pass: "CAMBIAR_PASSWORD_AD"
+    admin_password: "Admin_DandyDash2026!"
+    jwt_secret: "cambiar_jwt_secret_aleatorio"
+    secret_key: "cambiar_flask_secret_aleatorio"
+
+  tasks:
+
+    # ── 1. Prerequisitos del sistema ─────────────────────────────
+    - name: Actualizar apt
+      apt:
+        update_cache: yes
+
+    - name: Instalar dependencias del sistema
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+          - python3-dev
+          - postgresql
+          - postgresql-contrib
+          - libpq-dev
+          - nginx
+          - git
+          - libldap2-dev
+          - libsasl2-dev
+          - libssl-dev
+          - build-essential
+          - openssl
+        state: present
+
+    # ── 2. Usuario del sistema ───────────────────────────────────
+    - name: Crear usuario del sistema dandydash-app
+      user:
+        name: "{{ app_user }}"
+        system: yes
+        shell: /bin/bash
+        home: /home/dandydash-app
+
+    # ── 3. Directorio de logs ────────────────────────────────────
+    - name: Crear directorio de logs
+      file:
+        path: "{{ log_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        mode: "0755"
+
+    # ── 4. PostgreSQL ────────────────────────────────────────────
+    - name: Asegurar que PostgreSQL está activo
+      service:
+        name: postgresql
+        state: started
+        enabled: yes
+
+    - name: Crear usuario PostgreSQL
+      become_user: postgres
+      postgresql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_pass }}"
+        state: present
+
+    - name: Crear base de datos PostgreSQL
+      become_user: postgres
+      postgresql_db:
+        name: "{{ db_name }}"
+        owner: "{{ db_user }}"
+        state: present
+
+    # ── 5. Código de la aplicación ───────────────────────────────
+    - name: Crear directorio de la aplicación
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        mode: "0755"
+
+    - name: Copiar código de la API
+      synchronize:
+        src: ./
+        dest: "{{ app_dir }}/"
+        rsync_opts:
+          - "--exclude=venv"
+          - "--exclude=__pycache__"
+          - "--exclude=.git"
+
+    - name: Ajustar propietario del directorio de la app
+      file:
+        path: "{{ app_dir }}"
+        owner: "{{ app_user }}"
+        recurse: yes
+
+    # ── 6. Entorno virtual Python ────────────────────────────────
+    - name: Crear entorno virtual Python
+      command: python3 -m venv {{ app_dir }}/venv
+      args:
+        creates: "{{ app_dir }}/venv"
+      become_user: "{{ app_user }}"
+
+    - name: Instalar dependencias Python
+      pip:
+        requirements: "{{ app_dir }}/requirements.txt"
+        virtualenv: "{{ app_dir }}/venv"
+      become_user: "{{ app_user }}"
+
+    # ── 7. Fichero .env ──────────────────────────────────────────
+    - name: Crear fichero .env
+      copy:
+        dest: "{{ app_dir }}/.env"
+        owner: "{{ app_user }}"
+        mode: "0600"
+        content: |
+          SECRET_KEY={{ secret_key }}
+          JWT_SECRET_KEY={{ jwt_secret }}
+          FLASK_ENV=production
+          DB_HOST=localhost
+          DB_PORT=5432
+          DB_NAME={{ db_name }}
+          DB_USER={{ db_user }}
+          DB_PASS={{ db_pass }}
+          LDAP_SERVER={{ ldap_server }}
+          LDAP_SERVER2=192.168.30.11
+          LDAP_DOMAIN={{ domain }}
+          LDAP_BASE_DN={{ ldap_base }}
+          LDAP_BIND_USER={{ ldap_bind_user }}
+          LDAP_BIND_PASS={{ ldap_bind_pass }}
+          MFA_ISSUER=DandyDash
+          ADMIN_PASSWORD={{ admin_password }}
+
+    # ── 8. Certificado TLS autofirmado ───────────────────────────
+    - name: Crear directorio SSL
+      file:
+        path: /etc/ssl/dandydash
+        state: directory
+        mode: "0755"
+
+    - name: Generar certificado TLS autofirmado
+      command: >
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048
+        -keyout /etc/ssl/dandydash/key.pem
+        -out /etc/ssl/dandydash/cert.pem
+        -subj "/CN=dandydash.local/O=DandyDash/C=ES"
+      args:
+        creates: /etc/ssl/dandydash/cert.pem
+
+    # ── 9. Servicio systemd ──────────────────────────────────────
+    - name: Instalar servicio systemd
+      copy:
+        src: dandydash-api.service
+        dest: /etc/systemd/system/dandydash-api.service
+        mode: "0644"
+
+    - name: Recargar systemd y activar el servicio
+      systemd:
+        name: dandydash-api
+        enabled: yes
+        daemon_reload: yes
+        state: restarted
+
+    # ── 10. Nginx ────────────────────────────────────────────────
+    - name: Instalar configuración Nginx
+      copy:
+        src: dandydash-nginx.conf
+        dest: /etc/nginx/sites-available/dandydash
+        mode: "0644"
+
+    - name: Activar site en Nginx
+      file:
+        src: /etc/nginx/sites-available/dandydash
+        dest: /etc/nginx/sites-enabled/dandydash
+        state: link
+
+    - name: Eliminar site default de Nginx
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Reiniciar Nginx
+      service:
+        name: nginx
+        state: restarted
+        enabled: yes
+
+    # ── 11. Verificación ─────────────────────────────────────────
+    - name: Esperar a que la API arranque
+      wait_for:
+        port: 5000
+        host: 127.0.0.1
+        delay: 3
+        timeout: 30
+
+    - name: Comprobar health endpoint
+      uri:
+        url: http://127.0.0.1:5000/api/health
+        method: GET
+        status_code: 200
+      register: health_result
+
+    - name: Mostrar resultado del health check
+      debug:
+        msg: "API respondiendo: {{ health_result.json }}"

@@ -1,0 +1,11 @@
+---
+# ═══════════════════════════════════════════════════════
+#  DandyDash — Playbook principal
+#  Ús: ansible-playbook -i inventory.ini playbook.yml
+# ═══════════════════════════════════════════════════════
+
+- name: Desplegament de l'API DandyDash
+  hosts: dandydash_app
+  become: yes
+  roles:
+    - dandydash-api
