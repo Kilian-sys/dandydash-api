@@ -1,0 +1,195 @@
+---
+# ═══════════════════════════════════════════════════════
+# ROL: dandydash-api
+# Desplega la API Flask de DandyDash amb Nginx i Gunicorn
+# ═══════════════════════════════════════════════════════
+
+# ── 1. Preparació del sistema ───────────────────────────
+- name: Actualitzar repositoris
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Instal·lar dependències del sistema
+  apt:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+      - python3-dev
+      - postgresql
+      - postgresql-contrib
+      - libpq-dev
+      - nginx
+      - git
+      - libldap2-dev
+      - libsasl2-dev
+      - libssl-dev
+      - build-essential
+      - openssl
+    state: present
+
+# ── 2. Usuari del sistema ───────────────────────────────
+- name: Crear usuari del sistema dandydash-app
+  user:
+    name: "{{ app_user }}"
+    system: yes
+    shell: /bin/bash
+    home: /home/dandydash-app
+    state: present
+
+# ── 3. Crear directoris necessaris ─────────────────────
+- name: Crear directoris de l'aplicació
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ app_user }}"
+    mode: "0755"
+  loop:
+    - "{{ app_dir }}"
+    - "{{ frontend_dir }}"
+    - "{{ log_dir }}"
+    - "{{ ssl_dir }}"
+
+# ── 4. PostgreSQL ───────────────────────────────────────
+- name: Assegurar que PostgreSQL està actiu
+  service:
+    name: postgresql
+    state: started
+    enabled: yes
+
+- name: Crear usuari PostgreSQL
+  become_user: postgres
+  postgresql_user:
+    name: "{{ db_user }}"
+    password: "{{ db_pass }}"
+    state: present
+
+- name: Crear base de dades PostgreSQL
+  become_user: postgres
+  postgresql_db:
+    name: "{{ db_name }}"
+    owner: "{{ db_user }}"
+    state: present
+
+# ── 5. Codi de l'aplicació ──────────────────────────────
+- name: Copiar codi de l'API al servidor
+  synchronize:
+    src: "../../../../"
+    dest: "{{ app_dir }}/"
+    rsync_opts:
+      - "--exclude=venv"
+      - "--exclude=__pycache__"
+      - "--exclude=.git"
+      - "--exclude=ansible"
+
+- name: Ajustar propietari del directori de l'app
+  file:
+    path: "{{ app_dir }}"
+    owner: "{{ app_user }}"
+    recurse: yes
+
+# ── 6. Entorn virtual Python ────────────────────────────
+- name: Crear entorn virtual Python
+  command: python3 -m venv {{ app_dir }}/venv
+  args:
+    creates: "{{ app_dir }}/venv"
+  become_user: "{{ app_user }}"
+
+- name: Instal·lar dependències Python
+  pip:
+    requirements: "{{ app_dir }}/requirements.txt"
+    virtualenv: "{{ app_dir }}/venv"
+  become_user: "{{ app_user }}"
+
+# ── 7. Fitxer .env des de plantilla Jinja2 ─────────────
+- name: Generar fitxer .env des de plantilla
+  template:
+    src: dandydash.env.j2
+    dest: "{{ app_dir }}/.env"
+    owner: "{{ app_user }}"
+    mode: "0600"
+  notify: Reiniciar DandyDash API
+
+# ── 8. Certificat TLS des de script Jinja2 ─────────────
+- name: Generar script SSL des de plantilla
+  template:
+    src: generate-ssl.sh.j2
+    dest: /tmp/generate-ssl.sh
+    mode: "0755"
+
+- name: Executar script de generació de certificats SSL
+  command: /tmp/generate-ssl.sh
+  args:
+    creates: "{{ ssl_dir }}/cert.pem"
+
+# ── 9. Servei systemd des de plantilla Jinja2 ──────────
+- name: Generar servei systemd des de plantilla
+  template:
+    src: dandydash-api.service.j2
+    dest: /etc/systemd/system/dandydash-api.service
+    mode: "0644"
+  notify: Reiniciar DandyDash API
+
+- name: Recarregar systemd i activar el servei
+  systemd:
+    name: dandydash-api
+    enabled: yes
+    daemon_reload: yes
+    state: started
+
+# ── 10. Configuració Nginx des de plantilla Jinja2 ──────
+- name: Generar configuració Nginx des de plantilla
+  template:
+    src: dandydash-nginx.conf.j2
+    dest: /etc/nginx/sites-available/dandydash
+    mode: "0644"
+  notify: Recarregar Nginx
+
+- name: Activar site Nginx (enllaç simbòlic)
+  file:
+    src: /etc/nginx/sites-available/dandydash
+    dest: /etc/nginx/sites-enabled/dandydash
+    state: link
+  notify: Recarregar Nginx
+
+- name: Eliminar site default de Nginx
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Recarregar Nginx
+
+- name: Assegurar que Nginx està actiu i habilitat
+  service:
+    name: nginx
+    state: started
+    enabled: yes
+
+# ── 11. Verificació final ───────────────────────────────
+- name: Verificar configuració de Nginx
+  command: nginx -t
+  register: nginx_test
+  changed_when: false
+
+- name: Mostrar resultat de la verificació de Nginx
+  debug:
+    msg: "Nginx configuració: OK"
+  when: nginx_test.rc == 0
+
+- name: Esperar que la API arranqui
+  wait_for:
+    port: 5000
+    host: 127.0.0.1
+    delay: 3
+    timeout: 30
+
+- name: Comprovar health endpoint de la API
+  uri:
+    url: http://127.0.0.1:5000/api/health
+    method: GET
+    status_code: 200
+  register: health_result
+
+- name: Mostrar resultat del health check
+  debug:
+    msg: "API DandyDash responen: {{ health_result.json }}"
