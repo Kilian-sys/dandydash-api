@@ -1,16 +1,15 @@
-from ldap3 import Server, Connection, ALL, NTLM, MODIFY_REPLACE, MODIFY_ADD, MODIFY_DELETE, SUBTREE
+from ldap3 import Server, Connection, ALL, MODIFY_REPLACE, MODIFY_ADD, MODIFY_DELETE, SUBTREE
 from ldap3.core.exceptions import LDAPException
 from flask import current_app
-import re
+import ssl
 
 def get_connection():
-    """Crea y devuelve una conexión autenticada al AD de Samba4."""
     cfg = current_app.config
     srv = Server(cfg["LDAP_SERVER"], get_info=ALL)
     conn = Connection(
         srv,
-        user=cfg["LDAP_BIND_USER"],
-        password=cfg["LDAP_BIND_PASS"],
+        user="administrator@dandydash.local",
+        password="DandyAdmin2026!",
         auto_bind=True
     )
     return conn
@@ -22,7 +21,7 @@ def get_connection():
 def list_users(search=""):
     conn = get_connection()
     base = current_app.config["LDAP_BASE_DN"]
-    f = f"(&(objectClass=user)(objectCategory=person)(!(objectClass=computer))(sAMAccountName=*{search}*))"
+    f = "(&(objectClass=user)(objectCategory=person)(!(objectClass=computer)))" if not search else f"(&(objectClass=user)(objectCategory=person)(!(objectClass=computer))(sAMAccountName=*{search}*))"
     conn.search(base, f, attributes=[
         "sAMAccountName","cn","givenName","sn","mail",
         "memberOf","userAccountControl","distinguishedName",
@@ -30,18 +29,18 @@ def list_users(search=""):
     ], search_scope=SUBTREE)
     users = []
     for e in conn.entries:
-        uac = int(str(e.userAccountControl)) if e.userAccountControl else 512
+        uac = (int(str(e["userAccountControl"].value)) if "userAccountControl" in e and e["userAccountControl"].value else 512)
         users.append({
-            "username":    str(e.sAMAccountName),
-            "name":        str(e.cn),
-            "first_name":  str(e.givenName) if e.givenName else "",
-            "last_name":   str(e.sn) if e.sn else "",
-            "email":       str(e.mail) if e.mail else "",
-            "groups":      [str(g) for g in e.memberOf] if e.memberOf else [],
+            "username":    (str(e["sAMAccountName"].value) if "sAMAccountName" in e and e["sAMAccountName"].value else ""),
+            "name":        (str(e["cn"].value) if "cn" in e and e["cn"].value else ""),
+            "first_name":  (str(e["givenName"].value) if "givenName" in e and e["givenName"].value else ""),
+            "last_name":   (str(e["sn"].value) if "sn" in e and e["sn"].value else ""),
+            "email":       (str(e["mail"].value) if "mail" in e and e["mail"].value else ""),
+            "groups":      ([str(g) for g in e["memberOf"].values] if "memberOf" in e and e["memberOf"].value else []),
             "enabled":     not bool(uac & 2),
-            "dn":          str(e.distinguishedName),
-            "created":     str(e.whenCreated) if e.whenCreated else "",
-            "description": str(e.description) if e.description else "",
+            "dn":          (str(e["distinguishedName"].value) if "distinguishedName" in e and e["distinguishedName"].value else ""),
+            "created":     (str(e["whenCreated"].value) if "whenCreated" in e and e["whenCreated"].value else ""),
+            "description": (str(e["description"].value) if "description" in e and e["description"].value else ""),
         })
     return users
 
@@ -53,18 +52,18 @@ def get_user(username):
     if not conn.entries:
         return None
     e = conn.entries[0]
-    uac = int(str(e.userAccountControl)) if e.userAccountControl else 512
+    uac = (int(str(e["userAccountControl"].value)) if "userAccountControl" in e and e["userAccountControl"].value else 512)
     return {
-        "username":    str(e.sAMAccountName),
-        "name":        str(e.cn),
-        "first_name":  str(e.givenName) if e.givenName else "",
-        "last_name":   str(e.sn) if e.sn else "",
-        "email":       str(e.mail) if e.mail else "",
-        "groups":      [str(g) for g in e.memberOf] if e.memberOf else [],
+        "username":    (str(e["sAMAccountName"].value) if "sAMAccountName" in e and e["sAMAccountName"].value else ""),
+        "name":        (str(e["cn"].value) if "cn" in e and e["cn"].value else ""),
+        "first_name":  (str(e["givenName"].value) if "givenName" in e and e["givenName"].value else ""),
+        "last_name":   (str(e["sn"].value) if "sn" in e and e["sn"].value else ""),
+        "email":       (str(e["mail"].value) if "mail" in e and e["mail"].value else ""),
+        "groups":      ([str(g) for g in e["memberOf"].values] if "memberOf" in e and e["memberOf"].value else []),
         "enabled":     not bool(uac & 2),
-        "dn":          str(e.distinguishedName),
-        "description": str(e.description) if e.description else "",
-        "home_dir":    str(e.homeDirectory) if e.homeDirectory else "",
+        "dn":          (str(e["distinguishedName"].value) if "distinguishedName" in e and e["distinguishedName"].value else ""),
+        "description": (str(e["description"].value) if "description" in e and e["description"].value else ""),
+        "home_dir":    (str(e["homeDirectory"].value) if "homeDirectory" in e and e["homeDirectory"].value else ""),
     }
 
 def create_user(username, password, first_name, last_name, email="", ou=None, description=""):
@@ -150,15 +149,15 @@ def enable_user(username, enable=True):
 def list_groups(search=""):
     conn = get_connection()
     base = current_app.config["LDAP_BASE_DN"]
-    f = f"(&(objectClass=group)(cn=*{search}*))"
+    f = "(&(objectClass=group))" if not search else f"(&(objectClass=group)(cn=*{search}*))"
     conn.search(base, f, attributes=["cn","description","member","distinguishedName"], search_scope=SUBTREE)
     groups = []
     for e in conn.entries:
         groups.append({
-            "name":        str(e.cn),
-            "description": str(e.description) if e.description else "",
-            "members":     [str(m) for m in e.member] if e.member else [],
-            "dn":          str(e.distinguishedName),
+            "name":        (str(e["cn"].value) if "cn" in e and e["cn"].value else ""),
+            "description": (str(e["description"].value) if "description" in e and e["description"].value else ""),
+            "members":     ([str(m) for m in e["member"].values] if "member" in e and e["member"].value else []),
+            "dn":          (str(e["distinguishedName"].value) if "distinguishedName" in e and e["distinguishedName"].value else ""),
         })
     return groups
 
@@ -171,10 +170,10 @@ def get_group(name):
         return None
     e = conn.entries[0]
     return {
-        "name":        str(e.cn),
-        "description": str(e.description) if e.description else "",
-        "members":     [str(m) for m in e.member] if e.member else [],
-        "dn":          str(e.distinguishedName),
+        "name":        (str(e["cn"].value) if "cn" in e and e["cn"].value else ""),
+        "description": (str(e["description"].value) if "description" in e and e["description"].value else ""),
+        "members":     ([str(m) for m in e["member"].values] if "member" in e and e["member"].value else []),
+        "dn":          (str(e["distinguishedName"].value) if "distinguishedName" in e and e["distinguishedName"].value else ""),
     }
 
 def create_group(name, description="", ou=None):
@@ -234,9 +233,9 @@ def list_ous():
     conn.search(base, "(objectClass=organizationalUnit)",
                 attributes=["ou","description","distinguishedName"], search_scope=SUBTREE)
     return [{
-        "name":        str(e.ou),
-        "description": str(e.description) if e.description else "",
-        "dn":          str(e.distinguishedName),
+        "name":        (str(e["ou"].value) if "ou" in e and e["ou"].value else ""),
+        "description": (str(e["description"].value) if "description" in e and e["description"].value else ""),
+        "dn":          (str(e["distinguishedName"].value) if "distinguishedName" in e and e["distinguishedName"].value else ""),
     } for e in conn.entries]
 
 def create_ou(name, description="", parent_dn=None):
