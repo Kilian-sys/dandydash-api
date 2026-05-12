@@ -8,6 +8,7 @@
 </head>
 <body>
 
+  <!-- ══════════════ LOGIN ══════════════ -->
   <div id="login-screen">
     <div class="login-card">
       <div class="login-logo">
@@ -15,6 +16,7 @@
         <h1>DandyDash</h1>
         <p>Gestion de Active Directory</p>
       </div>
+
       <div class="field">
         <label>Usuario</label>
         <input id="usr" type="text" placeholder="admin" autocomplete="username">
@@ -23,17 +25,23 @@
         <label>Contraseña</label>
         <input id="pwd" type="password" placeholder="••••••••" autocomplete="current-password">
       </div>
+
+      <!-- Se muestra solo si el servidor pide MFA -->
       <div id="mfabox" class="field" style="display:none">
         <label>Código MFA (Google Authenticator)</label>
         <input id="totp" type="text" placeholder="123456" maxlength="6" inputmode="numeric">
         <p class="mfa-hint">Abre la app y copia el código de 6 dígitos</p>
       </div>
+
       <button class="btn btn-primary" onclick="doLogin()">Entrar</button>
       <p class="error-msg" id="errmsg"></p>
     </div>
   </div>
 
+  <!-- ══════════════ APP ══════════════ -->
   <div id="app">
+
+    <!-- Barra superior -->
     <nav class="topbar">
       <span class="topbar-brand">💫 DandyDash</span>
       <div class="topbar-nav">
@@ -41,17 +49,21 @@
         <button class="nav-btn" data-section="users"     onclick="loadSection('users')">Usuarios</button>
         <button class="nav-btn" data-section="groups"    onclick="loadSection('groups')">Grupos</button>
         <button class="nav-btn" data-section="ous"       onclick="loadSection('ous')">OUs</button>
+        <button class="nav-btn" data-section="gpos"      onclick="loadSection('gpos')">GPOs</button>
       </div>
       <div class="topbar-right">
         <span class="topbar-user" id="topbar-username"></span>
         <button class="btn-logout" onclick="doLogout()">Salir</button>
       </div>
     </nav>
+
+    <!-- Contenido dinámico -->
     <div class="main">
       <div id="content"></div>
     </div>
   </div>
 
+  <!-- ══════════════ MODAL GENÉRICO ══════════════ -->
   <div id="modal" class="modal-backdrop" onclick="if(event.target===this)closeModal()">
     <div class="modal">
       <h3 id="modal-title"></h3>
