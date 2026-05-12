@@ -1,85 +1,93 @@
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
-from ldap3.core.exceptions import LDAPException
-from .. import db
-from ..models import AuditLog
-from ..ldap_utils import list_groups, get_group, create_group, delete_group, add_member_to_group, remove_member_from_group
+from flask_jwt_extended import jwt_required, get_jwt
+from app import ldap_utils as lu
+from app.models import AuditLog, db
 
-groups_bp = Blueprint("groups", __name__)
-
-def _log(action, target="", detail="", success=True):
-    username = get_jwt_identity()
-    role = get_jwt().get("role","viewer")
-    entry = AuditLog(username=username, role=role, action=action,
-                     target=target, detail=detail,
-                     ip_address=request.remote_addr, success=success)
-    db.session.add(entry)
-    db.session.commit()
+groups_bp = Blueprint('groups', __name__)
 
 def require_admin():
-    if get_jwt().get("role") != "admin":
-        return jsonify({"error": "Se requiere rol admin"}), 403
+    claims = get_jwt()
+    if claims.get('role') != 'admin':
+        return jsonify({'error': 'Se requiere rol admin'}), 403
     return None
 
-@groups_bp.route("/", methods=["GET"])
-@jwt_required()
-def get_groups():
-    search = request.args.get("search","")
-    try:
-        return jsonify({"groups": list_groups(search)})
-    except LDAPException as e:
-        return jsonify({"error": str(e)}), 500
+def audit(action, target, details=''):
+    claims = get_jwt()
+    log = AuditLog(username=claims.get('sub','?'), action=action, target=target, detail=details)
+    db.session.add(log); db.session.commit()
 
-@groups_bp.route("/", methods=["POST"])
+# ── Listar grupos ─────────────────────────────────────────
+@groups_bp.route('/', methods=['GET'])
 @jwt_required()
-def add_group():
+def list_groups():
+    search = request.args.get('search', '')
+    return jsonify({'groups': lu.list_groups(search)})
+
+# ── Crear grupo ───────────────────────────────────────────
+@groups_bp.route('/', methods=['POST'])
+@jwt_required()
+def create_group():
     err = require_admin()
     if err: return err
     data = request.get_json()
-    if not data.get("name"):
-        return jsonify({"error": "Campo requerido: name"}), 400
+    name = data.get('name','').strip()
+    if not name:
+        return jsonify({'error': 'El nombre del grupo es obligatorio'}), 400
     try:
-        create_group(data["name"], data.get("description",""), data.get("ou"))
-        _log("CREATE_GROUP", target=data["name"])
-        return jsonify({"message": f"Grupo {data['name']} creado"}), 201
-    except LDAPException as e:
-        _log("CREATE_GROUP", target=data["name"], detail=str(e), success=False)
-        return jsonify({"error": str(e)}), 500
+        lu.create_group(name, description=data.get('description',''))
+        audit('CREATE_GROUP', name)
+        return jsonify({'message': f'Grupo {name} creado'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
 
-@groups_bp.route("/<name>", methods=["DELETE"])
+# ── Ver grupo ─────────────────────────────────────────────
+@groups_bp.route('/<name>', methods=['GET'])
 @jwt_required()
-def remove_group(name):
+def get_group(name):
+    group = lu.get_group(name)
+    if not group:
+        return jsonify({'error': 'Grupo no encontrado'}), 404
+    return jsonify(group)
+
+# ── Eliminar grupo ────────────────────────────────────────
+@groups_bp.route('/<name>', methods=['DELETE'])
+@jwt_required()
+def delete_group(name):
     err = require_admin()
     if err: return err
     try:
-        delete_group(name)
-        _log("DELETE_GROUP", target=name)
-        return jsonify({"message": f"Grupo {name} eliminado"})
-    except LDAPException as e:
-        return jsonify({"error": str(e)}), 500
+        lu.delete_group(name)
+        audit('DELETE_GROUP', name)
+        return jsonify({'message': f'Grupo {name} eliminado'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
 
-@groups_bp.route("/<name>/members", methods=["POST"])
+# ── Añadir miembro al grupo ───────────────────────────────
+@groups_bp.route('/<name>/members', methods=['POST'])
 @jwt_required()
 def add_member(name):
     err = require_admin()
     if err: return err
     data = request.get_json()
-    username = data.get("username","")
+    username = data.get('username','').strip()
+    if not username:
+        return jsonify({'error': 'username es obligatorio'}), 400
     try:
-        add_member_to_group(name, username)
-        _log("ADD_MEMBER", target=name, detail=f"user={username}")
-        return jsonify({"message": f"{username} añadido a {name}"})
-    except LDAPException as e:
-        return jsonify({"error": str(e)}), 500
+        lu.add_member_to_group(name, username)
+        audit('ADD_GROUP_MEMBER', name, username)
+        return jsonify({'message': f'{username} añadido al grupo {name}'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
 
-@groups_bp.route("/<name>/members/<username>", methods=["DELETE"])
+# ── Quitar miembro del grupo ──────────────────────────────
+@groups_bp.route('/<name>/members/<username>', methods=['DELETE'])
 @jwt_required()
 def remove_member(name, username):
     err = require_admin()
     if err: return err
     try:
-        remove_member_from_group(name, username)
-        _log("REMOVE_MEMBER", target=name, detail=f"user={username}")
-        return jsonify({"message": f"{username} eliminado de {name}"})
-    except LDAPException as e:
-        return jsonify({"error": str(e)}), 500
+        lu.remove_member_from_group(name, username)
+        audit('REMOVE_GROUP_MEMBER', name, username)
+        return jsonify({'message': f'{username} eliminado del grupo {name}'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400

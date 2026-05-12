@@ -1,32 +1,29 @@
-# ─── Rutas de la aplicación ──────────────────────────────────
-app_dir: /opt/dandydash-api
-frontend_dir: /opt/dandydash-frontend
-log_dir: /var/log/dandydash
-ssl_dir: /etc/ssl/dandydash
+---
+# ── Aplicacion ────────────────────────────────
+app_name:      dandydash-api
+app_dir:       /opt/dandydash-api
+app_user:      dandydash-app
+app_port:      5000
+secret_key:    "cambiar-por-clave-segura-32-chars"
+jwt_secret:    "cambiar-por-jwt-secret-seguro"
 
-# ─── Usuario del sistema ─────────────────────────────────────
-app_user: dandydash-app
+# ── Base de datos PostgreSQL ──────────────────
+db_name:       dandydashdb
+db_user:       dandydash
+db_password:   "DandyDB2026!"
+db_host:       localhost
+db_port:       5432
 
-# ─── PostgreSQL ──────────────────────────────────────────────
-db_name: dandydashdb
-db_user: dandydash
-db_pass: "DBPass_DandyDash2026!"
+# ── Samba4 / LDAP ────────────────────────────
+ldap_server:   192.168.30.10
+ldap_domain:   dandydash.local
+ldap_base_dn:  "DC=dandydash,DC=local"
+ldap_bind_dn:  "administrator@dandydash.local"
+ldap_password: "DandyAdmin2026!"
 
-# ─── Dominio y red ───────────────────────────────────────────
-domain: dandydash.local
-app_ip: 192.168.20.10
+# ── Frontend ──────────────────────────────────
+frontend_dir:  /var/www/dandydash
 
-# ─── Samba4 AD ───────────────────────────────────────────────
-ldap_server: "192.168.30.10"
-ldap_server2: "192.168.30.11"
-ldap_base: "DC=dandydash,DC=local"
-ldap_bind_user: "CN=Administrator,CN=Users,DC=dandydash,DC=local"
-ldap_bind_pass: "DandyAdmin2026!"
-
-# ─── Seguridad de la app ─────────────────────────────────────
-admin_password: "Admin_DandyDash2026!"
-jwt_secret: "fdecf9d92afb0f7b7ce383ac22d30e4526fa6ae034ae2d6d664616a5ac6c674c"
-secret_key: "6bbab643c51281b34aef9949386497556b9dcc6216bca9585b5f1299a8ca34e4"
-
-# ─── MFA ─────────────────────────────────────────────────────
-mfa_issuer: "DandyDash"
+# ── SSL ───────────────────────────────────────
+ssl_cert:      /etc/ssl/dandydash/cert.pem
+ssl_key:       /etc/ssl/dandydash/key.pem

@@ -1,195 +1,278 @@
 ---
 # ═══════════════════════════════════════════════════════
-# ROL: dandydash-api
-# Desplega la API Flask de DandyDash amb Nginx i Gunicorn
+#  DandyDash API — Ansible Role Tasks
+#  Incluye: dependencias, API Flask, Nginx, SSSD+Samba4
 # ═══════════════════════════════════════════════════════
 
-# ── 1. Preparació del sistema ───────────────────────────
-- name: Actualitzar repositoris
+# ── 1. Dependencias del sistema ───────────────────────
+- name: Actualizar cache APT
   apt:
     update_cache: yes
     cache_valid_time: 3600
 
-- name: Instal·lar dependències del sistema
+- name: Instalar paquetes base
   apt:
     name:
+      # Python y build
       - python3
       - python3-pip
       - python3-venv
       - python3-dev
-      - postgresql
-      - postgresql-contrib
-      - libpq-dev
-      - nginx
-      - git
+      - build-essential
       - libldap2-dev
       - libsasl2-dev
       - libssl-dev
-      - build-essential
-      - openssl
+      # PostgreSQL
+      - postgresql
+      - postgresql-contrib
+      - python3-psycopg2
+      - acl
+      # Nginx
+      - nginx
+      # Integracion AD / SSSD
+      - sssd
+      - sssd-ad
+      - sssd-tools
+      - realmd
+      - adcli
+      - samba-common-bin
+      - oddjob
+      - oddjob-mkhomedir
+      - packagekit
+      - krb5-user
+      # Utilidades
+      - rsync
+      - git
+      - curl
     state: present
 
-# ── 2. Usuari del sistema ───────────────────────────────
-- name: Crear usuari del sistema dandydash-app
+# ── 2. Usuario de la aplicacion ───────────────────────
+- name: Crear usuario del sistema para la API
   user:
-    name: "{{ app_user }}"
-    system: yes
-    shell: /bin/bash
-    home: /home/dandydash-app
-    state: present
+    name:       "{{ app_user }}"
+    system:     yes
+    shell:      /bin/false
+    home:       "{{ app_dir }}"
+    create_home: yes
 
-# ── 3. Crear directoris necessaris ─────────────────────
-- name: Crear directoris de l'aplicació
-  file:
-    path: "{{ item }}"
-    state: directory
-    owner: "{{ app_user }}"
-    mode: "0755"
-  loop:
-    - "{{ app_dir }}"
-    - "{{ frontend_dir }}"
-    - "{{ log_dir }}"
-    - "{{ ssl_dir }}"
-
-# ── 4. PostgreSQL ───────────────────────────────────────
-- name: Assegurar que PostgreSQL està actiu
+# ── 3. PostgreSQL ─────────────────────────────────────
+- name: Iniciar y habilitar PostgreSQL
   service:
-    name: postgresql
-    state: started
+    name:    postgresql
+    state:   started
     enabled: yes
 
-- name: Crear usuari PostgreSQL
+- name: Crear usuario PostgreSQL
   become_user: postgres
   postgresql_user:
-    name: "{{ db_user }}"
-    password: "{{ db_pass }}"
-    state: present
+    name:     "{{ db_user }}"
+    password: "{{ db_password }}"
+    state:    present
 
-- name: Crear base de dades PostgreSQL
+- name: Crear base de datos PostgreSQL
   become_user: postgres
   postgresql_db:
-    name: "{{ db_name }}"
+    name:  "{{ db_name }}"
     owner: "{{ db_user }}"
     state: present
 
-# ── 5. Codi de l'aplicació ──────────────────────────────
-- name: Copiar codi de l'API al servidor
-  synchronize:
-    src: "../../../../"
-    dest: "{{ app_dir }}/"
-    rsync_opts:
-      - "--exclude=venv"
-      - "--exclude=__pycache__"
-      - "--exclude=.git"
-      - "--exclude=ansible"
-
-- name: Ajustar propietari del directori de l'app
+# ── 4. Codigo de la API ───────────────────────────────
+- name: Crear directorio de la aplicacion
   file:
-    path: "{{ app_dir }}"
+    path:  "{{ app_dir }}"
+    state: directory
     owner: "{{ app_user }}"
-    recurse: yes
+    group: "{{ app_user }}"
+    mode:  "0755"
 
-# ── 6. Entorn virtual Python ────────────────────────────
-- name: Crear entorn virtual Python
+- name: Copiar codigo fuente de la API
+  synchronize:
+    src:     "{{ playbook_dir }}/../app/"
+    dest:    "{{ app_dir }}/app/"
+    rsync_opts:
+      - "--chown={{ app_user }}:{{ app_user }}"
+
+- name: Copiar requirements.txt
+  copy:
+    src:   "{{ playbook_dir }}/../requirements.txt"
+    dest:  "{{ app_dir }}/requirements.txt"
+    owner: "{{ app_user }}"
+
+# ── 5. Entorno virtual Python ─────────────────────────
+- name: Crear entorno virtual
+  become_user: "{{ app_user }}"
   command: python3 -m venv {{ app_dir }}/venv
   args:
-    creates: "{{ app_dir }}/venv"
-  become_user: "{{ app_user }}"
+    creates: "{{ app_dir }}/venv/bin/activate"
 
-- name: Instal·lar dependències Python
+- name: Instalar dependencias Python
+  become_user: "{{ app_user }}"
   pip:
     requirements: "{{ app_dir }}/requirements.txt"
-    virtualenv: "{{ app_dir }}/venv"
-  become_user: "{{ app_user }}"
+    virtualenv:   "{{ app_dir }}/venv"
+    state:        present
 
-# ── 7. Fitxer .env des de plantilla Jinja2 ─────────────
-- name: Generar fitxer .env des de plantilla
+# ── 6. Fichero .env de configuracion ─────────────────
+- name: Crear fichero .env con configuracion
   template:
-    src: dandydash.env.j2
-    dest: "{{ app_dir }}/.env"
+    src:   env.j2
+    dest:  "{{ app_dir }}/.env"
     owner: "{{ app_user }}"
-    mode: "0600"
-  notify: Reiniciar DandyDash API
+    mode:  "0640"
 
-# ── 8. Certificat TLS des de script Jinja2 ─────────────
-- name: Generar script SSL des de plantilla
+# ── 7. Servicio systemd ───────────────────────────────
+- name: Crear unidad systemd para la API
   template:
-    src: generate-ssl.sh.j2
-    dest: /tmp/generate-ssl.sh
-    mode: "0755"
-
-- name: Executar script de generació de certificats SSL
-  command: /tmp/generate-ssl.sh
-  args:
-    creates: "{{ ssl_dir }}/cert.pem"
-
-# ── 9. Servei systemd des de plantilla Jinja2 ──────────
-- name: Generar servei systemd des de plantilla
-  template:
-    src: dandydash-api.service.j2
+    src:  dandydash-api.service.j2
     dest: /etc/systemd/system/dandydash-api.service
     mode: "0644"
-  notify: Reiniciar DandyDash API
 
-- name: Recarregar systemd i activar el servei
+- name: Recargar systemd y habilitar servicio
   systemd:
-    name: dandydash-api
-    enabled: yes
+    name:          dandydash-api
     daemon_reload: yes
-    state: started
+    enabled:       yes
+    state:         restarted
 
-# ── 10. Configuració Nginx des de plantilla Jinja2 ──────
-- name: Generar configuració Nginx des de plantilla
+# ── 8. Frontend estatico ──────────────────────────────
+- name: Crear directorios del frontend
+  file:
+    path:  "{{ item }}"
+    state: directory
+    owner: "{{ app_user }}"
+    mode:  "0755"
+  loop:
+    - "{{ frontend_dir }}"
+    - "{{ frontend_dir }}/css"
+    - "{{ frontend_dir }}/js"
+
+- name: Copiar ficheros del frontend
+  copy:
+    src:   "{{ playbook_dir }}/../frontend/{{ item.src }}"
+    dest:  "{{ frontend_dir }}/{{ item.dest }}"
+    owner: "{{ app_user }}"
+    mode:  "0644"
+  loop:
+    - { src: "index.html",    dest: "index.html" }
+    - { src: "css/style.css", dest: "css/style.css" }
+    - { src: "js/app.js",     dest: "js/app.js" }
+
+# ── 9. Certificado SSL autofirmado ────────────────────
+- name: Crear directorio SSL
+  file:
+    path:  /etc/ssl/dandydash
+    state: directory
+    mode:  "0750"
+
+- name: Generar certificado SSL autofirmado
+  command: >
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048
+    -keyout {{ ssl_key }} -out {{ ssl_cert }}
+    -subj "/C=ES/ST=Cataluna/L=Barcelona/O=DandyDash/CN=dandydash.local"
+  args:
+    creates: "{{ ssl_cert }}"
+
+# ── 10. Nginx ─────────────────────────────────────────
+- name: Crear configuracion Nginx
   template:
-    src: dandydash-nginx.conf.j2
-    dest: /etc/nginx/sites-available/dandydash
-    mode: "0644"
-  notify: Recarregar Nginx
-
-- name: Activar site Nginx (enllaç simbòlic)
-  file:
-    src: /etc/nginx/sites-available/dandydash
+    src:  nginx-dandydash.conf.j2
     dest: /etc/nginx/sites-enabled/dandydash
-    state: link
-  notify: Recarregar Nginx
+    mode: "0644"
 
-- name: Eliminar site default de Nginx
+- name: Eliminar site por defecto de Nginx
   file:
-    path: /etc/nginx/sites-enabled/default
+    path:  /etc/nginx/sites-enabled/default
     state: absent
-  notify: Recarregar Nginx
 
-- name: Assegurar que Nginx està actiu i habilitat
-  service:
-    name: nginx
-    state: started
-    enabled: yes
-
-# ── 11. Verificació final ───────────────────────────────
-- name: Verificar configuració de Nginx
+- name: Verificar y recargar Nginx
   command: nginx -t
-  register: nginx_test
+  notify: reload nginx
+
+- name: Habilitar e iniciar Nginx
+  service:
+    name:    nginx
+    enabled: yes
+    state:   started
+
+# ── 11. SSSD — Integracion con Samba4 AD ─────────────
+- name: Crear configuracion SSSD para Samba4
+  template:
+    src:  sssd.conf.j2
+    dest: /etc/sssd/sssd.conf
+    owner: root
+    group: root
+    mode:  "0600"
+
+- name: Crear configuracion Kerberos
+  template:
+    src:  krb5.conf.j2
+    dest: /etc/krb5.conf
+    mode: "0644"
+
+- name: Habilitar creacion automatica de home al login AD
+  command: pam-auth-update --enable mkhomedir
   changed_when: false
 
-- name: Mostrar resultat de la verificació de Nginx
+- name: Habilitar e iniciar SSSD
+  service:
+    name:    sssd
+    enabled: yes
+    state:   restarted
+
+- name: Verificar que SSSD puede resolver usuarios del AD
+  command: "id administrator@{{ ldap_domain }}"
+  register: sssd_test
+  failed_when: false
+  changed_when: false
+
+- name: Mostrar resultado test SSSD
   debug:
-    msg: "Nginx configuració: OK"
-  when: nginx_test.rc == 0
+    msg: "SSSD test: {{ sssd_test.stdout | default(sssd_test.stderr) }}"
 
-- name: Esperar que la API arranqui
-  wait_for:
-    port: 5000
-    host: 127.0.0.1
-    delay: 3
-    timeout: 30
+# ── 12. Sudoers para admins del AD ───────────────────
+- name: Permitir sudo a Domain Admins
+  copy:
+    content: |
+      # Domain Admins de dandydash.local tienen sudo completo
+      %domain\ admins@dandydash.local ALL=(ALL) ALL
+    dest:  /etc/sudoers.d/dandydash-ad
+    mode:  "0440"
+    validate: "visudo -cf %s"
 
-- name: Comprovar health endpoint de la API
-  uri:
-    url: http://127.0.0.1:5000/api/health
-    method: GET
-    status_code: 200
-  register: health_result
+# ── 13. Firewall UFW ──────────────────────────────────
+- name: Instalar UFW
+  apt:
+    name:  ufw
+    state: present
 
-- name: Mostrar resultat del health check
-  debug:
-    msg: "API DandyDash responen: {{ health_result.json }}"
+- name: Permitir SSH
+  ufw:
+    rule: allow
+    port: "22"
+
+- name: Permitir HTTPS
+  ufw:
+    rule: allow
+    port: "443"
+
+- name: Permitir HTTP (redireccion a HTTPS)
+  ufw:
+    rule: allow
+    port: "80"
+
+- name: Permitir WireGuard
+  ufw:
+    rule:     allow
+    port:     "51820"
+    proto:    udp
+
+- name: Activar UFW
+  ufw:
+    state: enabled
+
+# ── Handlers ─────────────────────────────────────────
+handlers:
+  - name: reload nginx
+    service:
+      name:  nginx
+      state: reloaded

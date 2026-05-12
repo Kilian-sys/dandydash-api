@@ -1,128 +1,162 @@
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
-from ldap3.core.exceptions import LDAPException
-from .. import db
-from ..models import AuditLog
-from ..ldap_utils import list_users, get_user, create_user, delete_user, modify_user, set_password, enable_user
+from flask_jwt_extended import jwt_required, get_jwt
+from app import ldap_utils as lu
+from app.models import AuditLog, db
 
-users_bp = Blueprint("users", __name__)
-
-def _log(action, target="", detail="", success=True):
-    username = get_jwt_identity()
-    role = get_jwt().get("role","viewer")
-    entry = AuditLog(username=username, role=role, action=action,
-                     target=target, detail=detail,
-                     ip_address=request.remote_addr, success=success)
-    db.session.add(entry)
-    db.session.commit()
+users_bp = Blueprint('users', __name__)
 
 def require_admin():
-    if get_jwt().get("role") != "admin":
-        return jsonify({"error": "Se requiere rol admin"}), 403
+    claims = get_jwt()
+    if claims.get('role') != 'admin':
+        return jsonify({'error': 'Se requiere rol admin'}), 403
     return None
 
-@users_bp.route("/", methods=["GET"])
-@jwt_required()
-def get_users():
-    search = request.args.get("search", "")
-    try:
-        users = list_users(search)
-        return jsonify({"users": users, "total": len(users)})
-    except LDAPException as e:
-        return jsonify({"error": str(e)}), 500
+def audit(action, target, details=''):
+    claims = get_jwt()
+    log = AuditLog(username=claims.get('sub','?'), action=action, target=target, detail=details)
+    db.session.add(log); db.session.commit()
 
-@users_bp.route("/<username>", methods=["GET"])
+# ── Listar usuarios ──────────────────────────────────────
+@users_bp.route('/', methods=['GET'])
 @jwt_required()
-def get_one_user(username):
-    try:
-        user = get_user(username)
-        if not user:
-            return jsonify({"error": "Usuario no encontrado"}), 404
-        return jsonify(user)
-    except LDAPException as e:
-        return jsonify({"error": str(e)}), 500
+def list_users():
+    search = request.args.get('search', '')
+    return jsonify({'users': lu.list_users(search)})
 
-@users_bp.route("/", methods=["POST"])
+# ── Crear usuario ────────────────────────────────────────
+@users_bp.route('/', methods=['POST'])
 @jwt_required()
-def add_user():
+def create_user():
     err = require_admin()
     if err: return err
     data = request.get_json()
-    required = ["username","password","first_name","last_name"]
-    for f in required:
-        if not data.get(f):
-            return jsonify({"error": f"Campo requerido: {f}"}), 400
+    username = data.get('username','').strip()
+    password = data.get('password','')
+    if not username or not password:
+        return jsonify({'error': 'username y password son obligatorios'}), 400
     try:
-        create_user(
-            username=data["username"],
-            password=data["password"],
-            first_name=data["first_name"],
-            last_name=data["last_name"],
-            email=data.get("email",""),
-            ou=data.get("ou"),
-            description=data.get("description","")
+        lu.create_user(
+            username=username, password=password,
+            first_name=data.get('first_name',''),
+            last_name=data.get('last_name',''),
+            email=data.get('email',''),
+            description=data.get('description','')
         )
-        _log("CREATE_USER", target=data["username"], detail=f"email={data.get('email','')}")
-        return jsonify({"message": f"Usuario {data['username']} creado correctamente"}), 201
-    except LDAPException as e:
-        _log("CREATE_USER", target=data["username"], detail=str(e), success=False)
-        return jsonify({"error": str(e)}), 500
+        audit('CREATE_USER', username)
+        return jsonify({'message': f'Usuario {username} creado correctamente'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
 
-@users_bp.route("/<username>", methods=["PUT"])
+# ── Ver usuario ──────────────────────────────────────────
+@users_bp.route('/<username>', methods=['GET'])
+@jwt_required()
+def get_user(username):
+    user = lu.get_user(username)
+    if not user:
+        return jsonify({'error': 'Usuario no encontrado'}), 404
+    return jsonify(user)
+
+# ── Editar usuario ───────────────────────────────────────
+@users_bp.route('/<username>', methods=['PUT'])
 @jwt_required()
 def update_user(username):
     err = require_admin()
     if err: return err
     data = request.get_json()
     try:
-        modify_user(username, data)
-        _log("MODIFY_USER", target=username, detail=str(data))
-        return jsonify({"message": f"Usuario {username} actualizado"})
-    except LDAPException as e:
-        _log("MODIFY_USER", target=username, detail=str(e), success=False)
-        return jsonify({"error": str(e)}), 500
+        lu.modify_user(username, data)
+        audit('UPDATE_USER', username)
+        return jsonify({'message': f'Usuario {username} actualizado'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
 
-@users_bp.route("/<username>", methods=["DELETE"])
+# ── Eliminar usuario ─────────────────────────────────────
+@users_bp.route('/<username>', methods=['DELETE'])
 @jwt_required()
-def remove_user(username):
+def delete_user(username):
     err = require_admin()
     if err: return err
     try:
-        delete_user(username)
-        _log("DELETE_USER", target=username)
-        return jsonify({"message": f"Usuario {username} eliminado"})
-    except LDAPException as e:
-        _log("DELETE_USER", target=username, detail=str(e), success=False)
-        return jsonify({"error": str(e)}), 500
+        lu.delete_user(username)
+        audit('DELETE_USER', username)
+        return jsonify({'message': f'Usuario {username} eliminado'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
 
-@users_bp.route("/<username>/password", methods=["POST"])
-@jwt_required()
-def change_user_password(username):
-    err = require_admin()
-    if err: return err
-    data = request.get_json()
-    new_pw = data.get("password","")
-    if len(new_pw) < 8:
-        return jsonify({"error": "La contraseña debe tener al menos 8 caracteres"}), 400
-    try:
-        set_password(username, new_pw)
-        _log("SET_PASSWORD", target=username)
-        return jsonify({"message": "Contraseña actualizada"})
-    except LDAPException as e:
-        return jsonify({"error": str(e)}), 500
-
-@users_bp.route("/<username>/enable", methods=["POST"])
+# ── Habilitar / Deshabilitar ─────────────────────────────
+@users_bp.route('/<username>/toggle', methods=['PATCH'])
 @jwt_required()
 def toggle_user(username):
     err = require_admin()
     if err: return err
     data = request.get_json()
-    enable = data.get("enable", True)
+    enabled = data.get('enabled', True)
     try:
-        enable_user(username, enable)
-        action = "ENABLE_USER" if enable else "DISABLE_USER"
-        _log(action, target=username)
-        state = "habilitado" if enable else "deshabilitado"
-        return jsonify({"message": f"Usuario {username} {state}"})
-    except LDAPException as e:
-        return jsonify({"error": str(e)}), 500
+        lu.set_user_enabled(username, enabled)
+        action = 'ENABLE_USER' if enabled else 'DISABLE_USER'
+        audit(action, username)
+        state = 'habilitado' if enabled else 'deshabilitado'
+        return jsonify({'message': f'Usuario {username} {state}'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+# ── Cambiar contraseña ───────────────────────────────────
+@users_bp.route('/<username>/password', methods=['POST'])
+@jwt_required()
+def change_password(username):
+    err = require_admin()
+    if err: return err
+    data = request.get_json()
+    password = data.get('password','')
+    if not password:
+        return jsonify({'error': 'La contraseña no puede estar vacía'}), 400
+    try:
+        lu.set_password(username, password)
+        audit('CHANGE_PASSWORD', username)
+        return jsonify({'message': f'Contraseña de {username} actualizada'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+# ── Forzar cambio de contraseña en próximo login ─────────
+@users_bp.route('/<username>/force-password-change', methods=['POST'])
+@jwt_required()
+def force_password_change(username):
+    err = require_admin()
+    if err: return err
+    try:
+        lu.force_password_change(username)
+        audit('FORCE_PWD_CHANGE', username)
+        return jsonify({'message': f'{username} deberá cambiar contraseña al próximo inicio de sesión'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+# ── Horas de inicio de sesión ────────────────────────────
+@users_bp.route('/<username>/logon-hours', methods=['POST'])
+@jwt_required()
+def set_logon_hours(username):
+    err = require_admin()
+    if err: return err
+    data = request.get_json()
+    hours = data.get('hours', [])
+    try:
+        lu.set_logon_hours(username, hours)
+        audit('SET_LOGON_HOURS', username, f'{len(hours)} franjas configuradas')
+        return jsonify({'message': f'Horas de acceso configuradas para {username}'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+# ── Equipos permitidos ───────────────────────────────────
+@users_bp.route('/<username>/workstations', methods=['POST'])
+@jwt_required()
+def set_workstations(username):
+    err = require_admin()
+    if err: return err
+    data = request.get_json()
+    workstations = data.get('workstations', [])
+    try:
+        lu.set_workstations(username, workstations)
+        audit('SET_WORKSTATIONS', username, ','.join(workstations) if workstations else 'todos')
+        msg = f'Equipos configurados: {", ".join(workstations)}' if workstations else 'Acceso permitido desde todos los equipos'
+        return jsonify({'message': msg})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
