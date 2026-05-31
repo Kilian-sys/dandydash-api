@@ -1,4 +1,6 @@
 from flask import Blueprint, request, jsonify, current_app
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
 from datetime import datetime, timedelta
 import bcrypt, pyotp
@@ -17,6 +19,19 @@ def _log(username, action, target="", detail="", success=True):
 
 @auth_bp.route("/login", methods=["POST"])
 def login():
+    # Rate limiting manual por IP
+    from flask import current_app
+    ip = request.remote_addr
+    if not hasattr(current_app, '_login_attempts'):
+        current_app._login_attempts = {}
+    import time
+    now = time.time()
+    attempts = current_app._login_attempts.get(ip, [])
+    attempts = [t for t in attempts if now - t < 60]
+    if len(attempts) >= 5:
+        return jsonify({'error': 'Demasiados intentos. Espera 1 minuto.'}), 429
+    current_app._login_attempts[ip] = attempts + [now]
+
     data = request.get_json()
     username = data.get("username","").strip()
     password = data.get("password","")
@@ -121,3 +136,11 @@ def change_password():
     db.session.commit()
     _log(username, "CHANGE_PASSWORD")
     return jsonify({"message": "Contraseña actualizada"})
+
+@auth_bp.route("/refresh", methods=["POST"])
+@jwt_required()
+def refresh():
+    from flask_jwt_extended import create_access_token, get_jwt_identity
+    identity = get_jwt_identity()
+    new_token = create_access_token(identity=identity)
+    return jsonify({"access_token": new_token})

@@ -27,3 +27,19 @@ frontend_dir:  /var/www/dandydash
 # ── SSL ───────────────────────────────────────
 ssl_cert:      /etc/ssl/dandydash/cert.pem
 ssl_key:       /etc/ssl/dandydash/key.pem
+
+# Base de datos
+db_name: dandydashdb
+db_user: dandydash
+db_pass: dandydash
+ldap_server2:  "ldap://192.168.30.11"
+domain:         "dandydash.local"
+ldap_base:      "DC=dandydash,DC=local"
+ldap_bind_user: "administrator@dandydash.local"
+ldap_bind_pass: "DandyAdmin2026!"
+mfa_issuer:     "DandyDash"
+admin_password: "Admin_DandyDash2026!"
+log_dir:        /var/log/dandydash
+ssl_dir:        /etc/ssl/dandydash
+app_ip:         192.168.20.10
+ldap_domain:    dandydash.local

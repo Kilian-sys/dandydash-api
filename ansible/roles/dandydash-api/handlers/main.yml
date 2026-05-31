@@ -1,19 +1,10 @@
-- name: Recarregar Nginx
+---
+- name: reload nginx
   service:
-    name: nginx
+    name:  nginx
     state: reloaded
 
-- name: Reiniciar Nginx
-  service:
-    name: nginx
-    state: restarted
-
-- name: Reiniciar DandyDash API
-  service:
-    name: dandydash-api
-    state: restarted
-
-- name: Reiniciar PostgreSQL
-  service:
-    name: postgresql
+- name: restart dandydash-api
+  systemd:
+    name:  dandydash-api
     state: restarted

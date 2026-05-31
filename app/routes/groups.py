@@ -38,7 +38,7 @@ def create_group():
         audit('CREATE_GROUP', name)
         return jsonify({'message': f'Grupo {name} creado'})
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        import logging; logging.getLogger('dandydash').error(str(e)); return jsonify({'error': 'Error interno del servidor'}), 400
 
 # ── Ver grupo ─────────────────────────────────────────────
 @groups_bp.route('/<name>', methods=['GET'])
@@ -60,7 +60,7 @@ def delete_group(name):
         audit('DELETE_GROUP', name)
         return jsonify({'message': f'Grupo {name} eliminado'})
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        import logging; logging.getLogger('dandydash').error(str(e)); return jsonify({'error': 'Error interno del servidor'}), 400
 
 # ── Añadir miembro al grupo ───────────────────────────────
 @groups_bp.route('/<name>/members', methods=['POST'])
@@ -77,7 +77,7 @@ def add_member(name):
         audit('ADD_GROUP_MEMBER', name, username)
         return jsonify({'message': f'{username} añadido al grupo {name}'})
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        import logging; logging.getLogger('dandydash').error(str(e)); return jsonify({'error': 'Error interno del servidor'}), 400
 
 # ── Quitar miembro del grupo ──────────────────────────────
 @groups_bp.route('/<name>/members/<username>', methods=['DELETE'])
@@ -90,4 +90,23 @@ def remove_member(name, username):
         audit('REMOVE_GROUP_MEMBER', name, username)
         return jsonify({'message': f'{username} eliminado del grupo {name}'})
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        import logging; logging.getLogger('dandydash').error(str(e)); return jsonify({'error': 'Error interno del servidor'}), 400
+
+@groups_bp.route('/<name>/move', methods=['POST'])
+@jwt_required()
+def move_group(name):
+    err = require_admin()
+    if err: return err
+    data = request.get_json() or {}
+    ou_dn = data.get('ou_dn','')
+    if not ou_dn:
+        return jsonify({'error': 'ou_dn es obligatorio'}), 400
+    try:
+        from app import ldap_utils as lu
+        group = lu.get_group(name)
+        if not group:
+            return jsonify({'error': f'Grupo {name} no encontrado'}), 404
+        lu.move_object(group['dn'], ou_dn, 'group')
+        return jsonify({'message': f'Grupo {name} movido a {ou_dn}'})
+    except Exception as e:
+        import logging; logging.getLogger('dandydash').error(str(e)); return jsonify({'error': 'Error interno del servidor'}), 400

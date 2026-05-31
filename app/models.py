@@ -27,3 +27,11 @@ class AuditLog(db.Model):
     detail     = db.Column(db.Text)
     ip_address = db.Column(db.String(45))
     success    = db.Column(db.Boolean, default=True)
+
+class MFASecret(db.Model):
+    __tablename__ = 'mfa_secrets'
+    id         = db.Column(db.Integer, primary_key=True)
+    username   = db.Column(db.String(100), unique=True, nullable=False)
+    secret     = db.Column(db.String(200), nullable=False)
+    verified   = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)

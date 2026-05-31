@@ -115,7 +115,7 @@
 # ── 6. Fichero .env de configuracion ─────────────────
 - name: Crear fichero .env con configuracion
   template:
-    src:   env.j2
+    src:   dandydash.env.j2
     dest:  "{{ app_dir }}/.env"
     owner: "{{ app_user }}"
     mode:  "0640"
@@ -270,9 +270,3 @@
   ufw:
     state: enabled
 
-# ── Handlers ─────────────────────────────────────────
-handlers:
-  - name: reload nginx
-    service:
-      name:  nginx
-      state: reloaded
